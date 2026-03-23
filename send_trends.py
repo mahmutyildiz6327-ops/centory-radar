@@ -22,7 +22,7 @@ def send_telegram(message: str) -> bool:
         "text": message,
     }
 
-    response = requests.post(url, data=data, timeout=15)
+    response = requests.post(url, data=data, timeout=20)
     print("Telegram response:", response.status_code, response.text)
     response.raise_for_status()
     return True
@@ -35,9 +35,7 @@ def load_sent_trends():
     try:
         with open(STATE_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-        if isinstance(data, list):
-            return data
-        return []
+        return data if isinstance(data, list) else []
     except Exception as e:
         print("State file okunamadi:", str(e))
         return []
@@ -58,10 +56,10 @@ def get_google_trends():
         return [
             "bitcoin",
             "dolar",
+            "altin",
+            "petrol",
+            "borsa",
             "yapay zeka",
-            "instagram",
-            "son dakika",
-            "teknoloji",
         ]
 
 
@@ -81,7 +79,7 @@ def normalize_hashtag(text: str) -> str:
         if ch.isalnum() or ch == "_":
             cleaned.append(ch)
 
-    body = "".join(cleaned)
+    body = "".join(cleaned).strip("_")
 
     if not body:
         return ""
@@ -89,19 +87,24 @@ def normalize_hashtag(text: str) -> str:
     return "#" + body
 
 
+def extract_hashtags_from_text(text: str):
+    matches = re.findall(r"#([A-Za-z0-9ÇĞİÖŞÜçğıöşü_]{2,30})", text)
+    return ["#" + m for m in matches]
+
+
 def is_valid_hashtag(tag: str) -> bool:
     if not tag.startswith("#"):
         return False
 
     body = tag[1:]
+    low = body.lower()
 
     if len(body) < 2:
         return False
 
-    if len(body) > 24:
+    if len(body) > 18:
         return False
 
-    # tamamen sayi veya neredeyse sayiysa alma
     letters = sum(1 for c in body if c.isalpha())
     digits = sum(1 for c in body if c.isdigit())
 
@@ -111,22 +114,25 @@ def is_valid_hashtag(tag: str) -> bool:
     if digits > letters:
         return False
 
-    # cok fazla alt cizgi istemiyoruz
-    if body.count("_") > 2:
+    if body.count("_") > 1:
         return False
 
-    # cok garip tekrarli etiketleri ele
-    if len(set(body.lower())) <= 2 and len(body) > 4:
+    if len(set(low)) <= 2 and len(body) > 4:
         return False
 
-    low = body.lower()
+    if body.isupper() and len(body) > 6:
+        return False
+
+    if re.search(r"[A-Z][a-z]+[A-Z]", body) and len(body) > 12:
+        return False
 
     blocked_exact = {
         "turkey",
-        "trends",
+        "turkiye",
+        "türkiye",
         "trend",
+        "trends",
         "twitter",
-        "x",
         "gundem",
         "gündem",
         "kesfet",
@@ -135,13 +141,10 @@ def is_valid_hashtag(tag: str) -> bool:
         "login",
         "signup",
         "register",
-        "account",
         "home",
-        "news",
         "video",
-        "photos",
-        "turkiye",
-        "türkiye",
+        "news",
+        "status",
     }
 
     if low in blocked_exact:
@@ -152,29 +155,56 @@ def is_valid_hashtag(tag: str) -> bool:
         "login",
         "signup",
         "register",
-        "status",
-        "photo",
-        "video",
-        "explore",
-        "search",
         "privacy",
         "cookie",
-        "terms",
+        "search",
+        "explore",
+        "video",
+        "photo",
+        "status",
+        "account",
+        "official",
+        "only",
+        "follow",
+        "join",
+        "live",
     ]
 
-    if any(bad in low for bad in blocked_fragments):
+    if any(x in low for x in blocked_fragments):
         return False
 
-    # en az bir harf olsun, sadece karisik random sayi-harf olmasin
-    if not re.search(r"[A-Za-zÇĞİÖŞÜçğıöşü]", body):
+    blocked_keywords = [
+        "enhypen",
+        "army",
+        "bts",
+        "blackpink",
+        "kpop",
+        "vote",
+        "stream",
+        "stan",
+        "fandom",
+        "fan",
+        "award",
+        "comeback",
+        "taniyalim",
+        "tanıyalım",
+        "hakayagakalk",
+        "always",
+        "selam",
+        "dua",
+        "kutluolsun",
+    ]
+
+    if any(x in low for x in blocked_keywords):
+        return False
+
+    if "_" in body and len(body) > 10:
+        return False
+
+    if sum(1 for c in body if c.isupper()) >= 4:
         return False
 
     return True
-
-
-def extract_hashtags_from_text(text: str):
-    matches = re.findall(r"#([A-Za-z0-9ÇĞİÖŞÜçğıöşü_]{2,24})", text)
-    return ["#" + m for m in matches]
 
 
 def get_x_trends():
@@ -190,7 +220,7 @@ def get_x_trends():
         try:
             response = requests.get(
                 url,
-                timeout=15,
+                timeout=20,
                 headers={
                     "User-Agent": "Mozilla/5.0",
                     "Accept-Language": "tr-TR,tr;q=0.9,en;q=0.8",
@@ -203,13 +233,11 @@ def get_x_trends():
 
             candidate_texts = []
 
-            # linklerden metin topla
             for a in soup.find_all("a"):
                 txt = a.get_text(" ", strip=True)
                 if txt:
                     candidate_texts.append(txt)
 
-            # sayfanin duz metninden de hashtag ayikla
             page_text = soup.get_text(" ", strip=True)
             if page_text:
                 candidate_texts.append(page_text)
@@ -219,7 +247,6 @@ def get_x_trends():
 
                 for tag in tags:
                     tag = normalize_hashtag(tag)
-
                     if not tag:
                         continue
 
@@ -248,8 +275,21 @@ def normalize_google_item(text: str) -> str:
 
     text = re.sub(r"\s+", " ", text).strip()
 
-    # cöp kadar kisa olanlari alma
-    if len(text) < 2:
+    low = text.lower()
+
+    blocked_google = [
+        "canli skor",
+        "canlı skor",
+        "hava durumu",
+        "son dakika",
+        "tv yayin akisi",
+        "tv yayın akışı",
+    ]
+
+    if any(x in low for x in blocked_google):
+        return ""
+
+    if len(text) > 24:
         return ""
 
     return text
@@ -258,11 +298,9 @@ def normalize_google_item(text: str) -> str:
 def get_all_trends():
     x_trends = get_x_trends()
 
-    # X tarafindan yeterince etiket geldiyse onu kullan
     if len(x_trends) >= 3:
         return x_trends[:10]
 
-    # yetmezse Google Trends ile destekle
     google_trends = get_google_trends()
 
     merged = []
@@ -306,12 +344,13 @@ def build_message(trends):
 
 def main():
     current_trends = get_all_trends()
-    old_trends = load_sent_trends()
-    new_trends = get_new_trends(current_trends, old_trends)
 
     if not current_trends:
         print("Trend bulunamadi.")
         return
+
+    old_trends = load_sent_trends()
+    new_trends = get_new_trends(current_trends, old_trends)
 
     if not new_trends:
         print("Yeni trend yok. Mesaj gonderilmedi.")
