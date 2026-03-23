@@ -1,10 +1,12 @@
 import os
+import json
 import requests
 from bs4 import BeautifulSoup
 from pytrends.request import TrendReq
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
+STATE_FILE = "sent_trends.json"
 
 
 def send_telegram(message: str) -> bool:
@@ -153,11 +155,38 @@ def get_all_trends():
     return merged[:10]
 
 
+def load_sent_trends():
+    if not os.path.exists(STATE_FILE):
+        return []
+
+    try:
+        with open(STATE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        if isinstance(data, list):
+            return data
+
+        return []
+    except Exception as e:
+        print("State file okunamadi:", str(e))
+        return []
+
+
+def save_sent_trends(trends):
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(trends, f, ensure_ascii=False, indent=2)
+
+
+def get_new_trends(current_trends, old_trends):
+    old_set = {str(x).lower() for x in old_trends}
+    return [trend for trend in current_trends if trend.lower() not in old_set]
+
+
 def build_message(trends):
     if not trends:
-        return "🔥 Saatlik Trendler\n\nBugun su anda uygun trend bulunamadi."
+        return ""
 
-    lines = ["🔥 Saatlik Trendler", ""]
+    lines = ["🔥 Yeni Trendler", ""]
 
     for i, trend in enumerate(trends, start=1):
         lines.append(f"{i}. {trend}")
@@ -166,15 +195,19 @@ def build_message(trends):
 
 
 def main():
-    trends = get_all_trends()
-    message = build_message(trends)
+    current_trends = get_all_trends()
+    old_trends = load_sent_trends()
+    new_trends = get_new_trends(current_trends, old_trends)
 
-    ok = send_telegram(message)
+    if not new_trends:
+        print("Yeni trend yok. Mesaj gonderilmedi.")
+        return
 
-    if ok:
-        print("Mesaj gonderildi.")
-    else:
-        print("Mesaj gonderilemedi.")
+    message = build_message(new_trends[:10])
+    send_telegram(message)
+    save_sent_trends(current_trends)
+
+    print("Yeni trendler gonderildi.")
 
 
 if __name__ == "__main__":
