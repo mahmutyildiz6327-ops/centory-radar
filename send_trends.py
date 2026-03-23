@@ -2,30 +2,24 @@ import os
 import re
 import json
 import requests
+import tweepy
 from bs4 import BeautifulSoup
 from pytrends.request import TrendReq
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
+
+X_API_KEY = os.getenv("X_API_KEY")
+X_API_SECRET = os.getenv("X_API_SECRET")
+X_ACCESS_TOKEN = os.getenv("X_ACCESS_TOKEN")
+X_ACCESS_TOKEN_SECRET = os.getenv("X_ACCESS_TOKEN_SECRET")
+
 STATE_FILE = "sent_trends.json"
 
-
-def send_telegram(message: str) -> bool:
-    if not TELEGRAM_TOKEN:
-        raise ValueError("TELEGRAM_TOKEN bulunamadi")
-    if not CHAT_ID:
-        raise ValueError("CHAT_ID bulunamadi")
-
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    data = {
-        "chat_id": CHAT_ID,
-        "text": message,
-    }
-
-    response = requests.post(url, data=data, timeout=20)
-    print("Telegram response:", response.status_code, response.text)
-    response.raise_for_status()
-    return True
+BASE_POST_TEXT = (
+    "Gundemde one cikan basliklari takip ediyorum.\n"
+    "Iste su an dikkat ceken etiketler:"
+)
 
 
 def load_sent_trends():
@@ -44,6 +38,40 @@ def load_sent_trends():
 def save_sent_trends(trends):
     with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump(trends, f, ensure_ascii=False, indent=2)
+
+
+def send_telegram(message: str) -> bool:
+    if not TELEGRAM_TOKEN or not CHAT_ID:
+        print("Telegram secrets yok, Telegram atlandi.")
+        return False
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    data = {
+        "chat_id": CHAT_ID,
+        "text": message,
+    }
+
+    response = requests.post(url, data=data, timeout=20)
+    print("Telegram response:", response.status_code, response.text)
+    response.raise_for_status()
+    return True
+
+
+def send_x_post(text: str) -> bool:
+    required = [X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET]
+    if not all(required):
+        raise ValueError("X API secretleri eksik")
+
+    client = tweepy.Client(
+        consumer_key=X_API_KEY,
+        consumer_secret=X_API_SECRET,
+        access_token=X_ACCESS_TOKEN,
+        access_token_secret=X_ACCESS_TOKEN_SECRET,
+    )
+
+    response = client.create_tweet(text=text)
+    print("X post response:", response.data)
+    return True
 
 
 def get_google_trends():
@@ -249,7 +277,6 @@ def get_x_trends():
                     tag = normalize_hashtag(tag)
                     if not tag:
                         continue
-
                     if not is_valid_hashtag(tag):
                         continue
 
@@ -269,12 +296,10 @@ def get_x_trends():
 
 def normalize_google_item(text: str) -> str:
     text = str(text).strip()
-
     if not text:
         return ""
 
     text = re.sub(r"\s+", " ", text).strip()
-
     low = text.lower()
 
     blocked_google = [
@@ -330,16 +355,25 @@ def get_new_trends(current_trends, old_trends):
     return [trend for trend in current_trends if trend.lower() not in old_set]
 
 
-def build_message(trends):
-    if not trends:
-        return ""
+def choose_hashtags(trends, limit=3):
+    hashtags = [t for t in trends if str(t).startswith("#")]
+    if hashtags:
+        return hashtags[:limit]
 
-    lines = ["🔥 Trend Radar", ""]
+    fallback = []
+    for t in trends:
+        text = str(t).strip().replace(" ", "")
+        if not text:
+            continue
+        fallback.append("#" + text[:18])
+        if len(fallback) >= limit:
+            break
+    return fallback
 
-    for i, trend in enumerate(trends, start=1):
-        lines.append(f"{i}. {trend}")
 
-    return "\n".join(lines)
+def build_post_text(tags):
+    hashtag_line = " ".join(tags)
+    return f"{BASE_POST_TEXT}\n\n{hashtag_line}".strip()
 
 
 def main():
@@ -356,11 +390,14 @@ def main():
         print("Yeni trend yok. Mesaj gonderilmedi.")
         return
 
-    message = build_message(new_trends[:10])
-    send_telegram(message)
-    save_sent_trends(current_trends)
+    tags = choose_hashtags(new_trends, limit=3)
+    post_text = build_post_text(tags)
 
-    print("Yeni trendler gonderildi.")
+    send_x_post(post_text)
+    send_telegram(post_text)
+
+    save_sent_trends(current_trends)
+    print("X ve Telegram gonderimi tamamlandi.")
 
 
 if __name__ == "__main__":
