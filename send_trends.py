@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import requests
 from bs4 import BeautifulSoup
@@ -27,134 +28,6 @@ def send_telegram(message: str) -> bool:
     return True
 
 
-def get_google_trends():
-    try:
-        pytrends = TrendReq(hl="tr-TR", tz=180, timeout=(10, 25))
-        trends = pytrends.trending_searches(pn="turkey")
-        return trends[0].dropna().astype(str).tolist()
-    except Exception as e:
-        print("Google Trends fallback:", str(e))
-        return [
-            "bitcoin",
-            "dolar",
-            "yapayzeka",
-            "instagram",
-            "sondakika",
-            "teknoloji",
-        ]
-
-
-def clean_hashtag(text: str) -> str:
-    text = text.strip()
-
-    if not text.startswith("#"):
-        return ""
-
-    body = text[1:]
-    allowed = []
-
-    for ch in body:
-        if ch.isalnum() or ch == "_":
-            allowed.append(ch)
-
-    cleaned = "".join(allowed)
-
-    if len(cleaned) < 2:
-        return ""
-
-    return "#" + cleaned
-
-
-def get_x_trends():
-    try:
-        url = "https://trends24.in/turkey/"
-        response = requests.get(
-            url,
-            timeout=15,
-            headers={
-                "User-Agent": "Mozilla/5.0",
-                "Accept-Language": "tr-TR,tr;q=0.9,en;q=0.8",
-            },
-        )
-
-        response.raise_for_status()
-        response.encoding = response.apparent_encoding or "utf-8"
-
-        soup = BeautifulSoup(response.text, "html.parser")
-
-        trends = []
-        seen = set()
-
-        for a in soup.find_all("a"):
-            text = a.get_text(" ", strip=True)
-            cleaned = clean_hashtag(text)
-
-            if not cleaned:
-                continue
-
-            low = cleaned.lower()
-
-            bad_fragments = [
-                "trends24",
-                "twitter",
-                "trends",
-                "turkey",
-                "location",
-                "explore",
-                "login",
-                "signup",
-            ]
-
-            if any(bad in low for bad in bad_fragments):
-                continue
-
-            if low not in seen:
-                seen.add(low)
-                trends.append(cleaned)
-
-        return trends[:10]
-
-    except Exception as e:
-        print("X Trends fallback:", str(e))
-        return []
-
-
-def normalize_tag(value: str) -> str:
-    value = str(value).strip()
-
-    if not value:
-        return ""
-
-    value = value.replace(" ", "")
-
-    if not value.startswith("#"):
-        value = "#" + value
-
-    return value
-
-
-def get_all_trends():
-    google_trends = get_google_trends()
-    x_trends = get_x_trends()
-
-    merged = []
-    seen = set()
-
-    for item in x_trends + google_trends:
-        value = normalize_tag(item)
-
-        if not value or len(value) < 2:
-            continue
-
-        low = value.lower()
-
-        if low not in seen:
-            seen.add(low)
-            merged.append(value)
-
-    return merged[:10]
-
-
 def load_sent_trends():
     if not os.path.exists(STATE_FILE):
         return []
@@ -162,10 +35,8 @@ def load_sent_trends():
     try:
         with open(STATE_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-
         if isinstance(data, list):
             return data
-
         return []
     except Exception as e:
         print("State file okunamadi:", str(e))
@@ -177,6 +48,245 @@ def save_sent_trends(trends):
         json.dump(trends, f, ensure_ascii=False, indent=2)
 
 
+def get_google_trends():
+    try:
+        pytrends = TrendReq(hl="tr-TR", tz=180, timeout=(10, 25))
+        trends = pytrends.trending_searches(pn="turkey")
+        return trends[0].dropna().astype(str).tolist()
+    except Exception as e:
+        print("Google Trends fallback:", str(e))
+        return [
+            "bitcoin",
+            "dolar",
+            "yapay zeka",
+            "instagram",
+            "son dakika",
+            "teknoloji",
+        ]
+
+
+def normalize_hashtag(text: str) -> str:
+    text = str(text).strip()
+
+    if not text:
+        return ""
+
+    if not text.startswith("#"):
+        return ""
+
+    body = text[1:]
+
+    cleaned = []
+    for ch in body:
+        if ch.isalnum() or ch == "_":
+            cleaned.append(ch)
+
+    body = "".join(cleaned)
+
+    if not body:
+        return ""
+
+    return "#" + body
+
+
+def is_valid_hashtag(tag: str) -> bool:
+    if not tag.startswith("#"):
+        return False
+
+    body = tag[1:]
+
+    if len(body) < 2:
+        return False
+
+    if len(body) > 24:
+        return False
+
+    # tamamen sayi veya neredeyse sayiysa alma
+    letters = sum(1 for c in body if c.isalpha())
+    digits = sum(1 for c in body if c.isdigit())
+
+    if letters == 0:
+        return False
+
+    if digits > letters:
+        return False
+
+    # cok fazla alt cizgi istemiyoruz
+    if body.count("_") > 2:
+        return False
+
+    # cok garip tekrarli etiketleri ele
+    if len(set(body.lower())) <= 2 and len(body) > 4:
+        return False
+
+    low = body.lower()
+
+    blocked_exact = {
+        "turkey",
+        "trends",
+        "trend",
+        "twitter",
+        "x",
+        "gundem",
+        "gündem",
+        "kesfet",
+        "keşfet",
+        "explore",
+        "login",
+        "signup",
+        "register",
+        "account",
+        "home",
+        "news",
+        "video",
+        "photos",
+        "turkiye",
+        "türkiye",
+    }
+
+    if low in blocked_exact:
+        return False
+
+    blocked_fragments = [
+        "trends24",
+        "login",
+        "signup",
+        "register",
+        "status",
+        "photo",
+        "video",
+        "explore",
+        "search",
+        "privacy",
+        "cookie",
+        "terms",
+    ]
+
+    if any(bad in low for bad in blocked_fragments):
+        return False
+
+    # en az bir harf olsun, sadece karisik random sayi-harf olmasin
+    if not re.search(r"[A-Za-zÇĞİÖŞÜçğıöşü]", body):
+        return False
+
+    return True
+
+
+def extract_hashtags_from_text(text: str):
+    matches = re.findall(r"#([A-Za-z0-9ÇĞİÖŞÜçğıöşü_]{2,24})", text)
+    return ["#" + m for m in matches]
+
+
+def get_x_trends():
+    urls = [
+        "https://trends24.in/turkey/",
+        "https://trends24.in/turkiye/",
+    ]
+
+    all_tags = []
+    seen = set()
+
+    for url in urls:
+        try:
+            response = requests.get(
+                url,
+                timeout=15,
+                headers={
+                    "User-Agent": "Mozilla/5.0",
+                    "Accept-Language": "tr-TR,tr;q=0.9,en;q=0.8",
+                },
+            )
+            response.raise_for_status()
+            response.encoding = response.apparent_encoding or "utf-8"
+
+            soup = BeautifulSoup(response.text, "html.parser")
+
+            candidate_texts = []
+
+            # linklerden metin topla
+            for a in soup.find_all("a"):
+                txt = a.get_text(" ", strip=True)
+                if txt:
+                    candidate_texts.append(txt)
+
+            # sayfanin duz metninden de hashtag ayikla
+            page_text = soup.get_text(" ", strip=True)
+            if page_text:
+                candidate_texts.append(page_text)
+
+            for raw_text in candidate_texts:
+                tags = extract_hashtags_from_text(raw_text)
+
+                for tag in tags:
+                    tag = normalize_hashtag(tag)
+
+                    if not tag:
+                        continue
+
+                    if not is_valid_hashtag(tag):
+                        continue
+
+                    low = tag.lower()
+                    if low not in seen:
+                        seen.add(low)
+                        all_tags.append(tag)
+
+            if all_tags:
+                break
+
+        except Exception as e:
+            print("X Trends source error:", url, str(e))
+
+    return all_tags[:10]
+
+
+def normalize_google_item(text: str) -> str:
+    text = str(text).strip()
+
+    if not text:
+        return ""
+
+    text = re.sub(r"\s+", " ", text).strip()
+
+    # cöp kadar kisa olanlari alma
+    if len(text) < 2:
+        return ""
+
+    return text
+
+
+def get_all_trends():
+    x_trends = get_x_trends()
+
+    # X tarafindan yeterince etiket geldiyse onu kullan
+    if len(x_trends) >= 3:
+        return x_trends[:10]
+
+    # yetmezse Google Trends ile destekle
+    google_trends = get_google_trends()
+
+    merged = []
+    seen = set()
+
+    for item in x_trends:
+        low = item.lower()
+        if low not in seen:
+            seen.add(low)
+            merged.append(item)
+
+    for item in google_trends:
+        value = normalize_google_item(item)
+        if not value:
+            continue
+
+        low = value.lower()
+        if low not in seen:
+            seen.add(low)
+            merged.append(value)
+
+    return merged[:10]
+
+
 def get_new_trends(current_trends, old_trends):
     old_set = {str(x).lower() for x in old_trends}
     return [trend for trend in current_trends if trend.lower() not in old_set]
@@ -186,7 +296,7 @@ def build_message(trends):
     if not trends:
         return ""
 
-    lines = ["🔥 Yeni Trendler", ""]
+    lines = ["🔥 Trend Radar", ""]
 
     for i, trend in enumerate(trends, start=1):
         lines.append(f"{i}. {trend}")
@@ -198,6 +308,10 @@ def main():
     current_trends = get_all_trends()
     old_trends = load_sent_trends()
     new_trends = get_new_trends(current_trends, old_trends)
+
+    if not current_trends:
+        print("Trend bulunamadi.")
+        return
 
     if not new_trends:
         print("Yeni trend yok. Mesaj gonderilmedi.")
