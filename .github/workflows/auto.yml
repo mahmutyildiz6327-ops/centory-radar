@@ -2,7 +2,7 @@ name: Auto Content Radar
 
 on:
   schedule:
-    - cron: "0 * * * *"
+    - cron: "0 */3 * * *"
   workflow_dispatch:
 
 permissions:
@@ -16,6 +16,10 @@ jobs:
     env:
       TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
       CHAT_ID: ${{ secrets.CHAT_ID }}
+      X_API_KEY: ${{ secrets.X_API_KEY }}
+      X_API_SECRET: ${{ secrets.X_API_SECRET }}
+      X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
+      X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
 
     steps:
       - name: Checkout repo
