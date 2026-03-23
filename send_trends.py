@@ -1,9 +1,10 @@
+import os
 import requests
 from bs4 import BeautifulSoup
 from pytrends.request import TrendReq
 
-TELEGRAM_TOKEN = "8601611233:AAG1sAnY1K5OC4cRsEdZP2F0ihR0JJFlxxY"
-CHAT_ID = "7474527272"
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
 
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
